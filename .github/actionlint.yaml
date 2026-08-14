@@ -1,0 +1,13 @@
+self-hosted-runner:
+  labels: []
+config-variables: null
+paths:
+  "**/.github/workflows/publish.yaml":
+    ignore:
+      # actionlint 1.7.12 still carries the pre-v3 input list for
+      # actions/create-github-app-token, where `client-id` does not exist and
+      # `app-id` is mandatory. Upstream has since inverted that: `app-id` now
+      # carries a deprecation notice pointing at `client-id`, so both reports
+      # are stale metadata rather than real errors.
+      - 'input "client-id" is not defined in action "actions/create-github-app-token'
+      - 'missing input "app-id" which is required by action "actions/create-github-app-token'
