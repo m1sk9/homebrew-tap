@@ -14,9 +14,15 @@ on:
         description: "Upstream release tag to publish (e.g. v0.1.0)"
         required: true
         type: string
+  # A version is only published once its bump lands on main — a pull request
+  # that never merges must not leave a tag pointing at a version this tap does
+  # not serve.
+  pull_request:
+    types:
+      - closed
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.formula || github.event.client_payload.formula }}
+  group: ${{ github.workflow }}-${{ inputs.formula || github.event.client_payload.formula || github.event.pull_request.number }}
   cancel-in-progress: false
 
 permissions:
@@ -25,6 +31,7 @@ permissions:
 jobs:
   bump:
     name: bump ${{ inputs.formula || github.event.client_payload.formula }}
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     env:
       FORMULA: ${{ inputs.formula || github.event.client_payload.formula }}
@@ -134,3 +141,63 @@ jobs:
           # the setting turned off.
           gh pr merge --auto --squash --delete-branch "${branch}" \
             || echo "::warning::could not enable auto-merge; merge the pull request manually"
+
+  tag:
+    name: tag published packages
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 2
+
+      - name: Tag published packages
+        run: |
+          set -euo pipefail
+
+          # Derived from the merged files rather than the branch name: a name
+          # like bump/<formula>-<tag> cannot be split reliably once either half
+          # contains a hyphen (herdr-worktree-hooks-plugin, v1.0.0-beta.1).
+          changed="$(git diff --name-only --diff-filter=AM HEAD^ HEAD -- Formula Casks)"
+          if [[ -z "${changed}" ]]; then
+            echo "::notice::no formula or cask changed"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          while read -r file; do
+            [[ -n "${file}" ]] || continue
+            name="$(basename "${file}" .rb)"
+
+            # Casks always carry a `version` stanza. Formulae usually leave it
+            # implicit and let Homebrew derive it from the release tarball, whose
+            # filename is the last path segment the bump job substitutes.
+            version="$(sed -n 's/^  version "\(.*\)"$/\1/p' "${file}")"
+            if [[ -z "${version}" ]]; then
+              url="$(sed -n 's/^  url "\(.*\)"$/\1/p' "${file}")"
+              segment="$(basename "${url}")"
+              segment="${segment%.tar.gz}"
+              version="${segment#v}"
+            fi
+
+            if [[ -z "${version}" ]]; then
+              echo "::error::could not determine a version for ${file}"
+              exit 1
+            fi
+
+            tag="${name}-${version}"
+            if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+              echo "::notice::${tag} already exists"
+              continue
+            fi
+
+            git tag "${tag}"
+            git push origin "refs/tags/${tag}"
+            echo "::notice::tagged ${tag}"
+          done <<< "${changed}"
