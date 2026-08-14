@@ -13,10 +13,7 @@ class Strays < Formula
   end
 
   test do
-    # strays enters the TUI at startup and exposes no --version/--help to probe,
-    # so running it here would either block on a TTY or fail on an environment
-    # detail rather than on the build. Assert the artifact instead.
-    assert_path_exists bin/"strays"
-    assert_predicate bin/"strays", :executable?
+    assert_match "strays #{version}", shell_output("#{bin}/strays --version")
+    assert_match "Usage:", shell_output("#{bin}/strays --help")
   end
 end
