@@ -1,0 +1,136 @@
+name: Publish
+
+on:
+  repository_dispatch:
+    types:
+      - publish
+  workflow_dispatch:
+    inputs:
+      formula:
+        description: "Formula to bump (e.g. strays)"
+        required: true
+        type: string
+      tag:
+        description: "Upstream release tag to publish (e.g. v0.1.0)"
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.formula || github.event.client_payload.formula }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    name: bump ${{ inputs.formula || github.event.client_payload.formula }}
+    runs-on: ubuntu-24.04
+    env:
+      FORMULA: ${{ inputs.formula || github.event.client_payload.formula }}
+      TAG: ${{ inputs.tag || github.event.client_payload.tag }}
+    steps:
+      # A GitHub App token rather than GITHUB_TOKEN: pushes made with
+      # GITHUB_TOKEN do not trigger workflows, which would leave the bump pull
+      # request without the build verification in tests.yaml.
+      - name: Get token
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.CLIENT_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+          # Skip token revocation because expired tokens are automatically
+          # invalidated by GitHub anyway.
+          skip-token-revoke: true
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          token: ${{ steps.token.outputs.token }}
+
+      - name: Validate dispatch payload
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${FORMULA}" =~ ^[a-z0-9][a-z0-9@+._-]*$ ]]; then
+            echo "::error::invalid formula name: ${FORMULA}"
+            exit 1
+          fi
+          if [[ ! "${TAG}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "::error::invalid tag: ${TAG}"
+            exit 1
+          fi
+          if [[ ! -f "Formula/${FORMULA}.rb" ]]; then
+            echo "::error::no such formula: Formula/${FORMULA}.rb"
+            exit 1
+          fi
+
+      - name: Update formula
+        id: update
+        run: |
+          set -euo pipefail
+
+          formula_file="Formula/${FORMULA}.rb"
+          current_url="$(sed -n 's/^  url "\(.*\)"$/\1/p' "${formula_file}")"
+          homepage="$(sed -n 's/^  homepage "\(.*\)"$/\1/p' "${formula_file}")"
+          if [[ -z "${current_url}" || -z "${homepage}" ]]; then
+            echo "::error::could not read the stable url and homepage from ${formula_file}"
+            exit 1
+          fi
+          echo "homepage=${homepage}" >> "${GITHUB_OUTPUT}"
+
+          # The tag is the last path segment of the release tarball url, so the
+          # bump is a substitution on that segment alone. This keeps the rest of
+          # the url (host, owner, repo, archive layout) authoritative in the
+          # formula instead of reconstructing it here.
+          new_url="${current_url%/*}/${TAG}.tar.gz"
+          curl --fail --silent --show-error --location --output release.tar.gz "${new_url}"
+          new_sha256="$(sha256sum release.tar.gz | cut -d ' ' -f 1)"
+          rm release.tar.gz
+
+          sed -i \
+            -e "s|^  url \".*\"$|  url \"${new_url}\"|" \
+            -e "s|^  sha256 \".*\"$|  sha256 \"${new_sha256}\"|" \
+            "${formula_file}"
+
+          if git diff --quiet -- "${formula_file}"; then
+            echo "::notice::${FORMULA} is already at ${TAG}"
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Open pull request
+        if: steps.update.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          HOMEPAGE: ${{ steps.update.outputs.homepage }}
+        run: |
+          set -euo pipefail
+
+          branch="bump/${FORMULA}-${TAG}"
+          version="${TAG#v}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "${branch}"
+          git commit --all --message "chore(${FORMULA}): bump to ${TAG}" \
+            --message "Upstream released ${TAG}, so the tap has to point at the new tarball for \`brew upgrade\` to see it."
+          git push --set-upstream origin "${branch}"
+
+          body="$(printf '%s\n' \
+            "Bumps \`${FORMULA}\` to upstream [\`${TAG}\`](${HOMEPAGE}/releases/tag/${TAG})." \
+            "" \
+            "Opened automatically by \`.github/workflows/publish.yaml\`.")"
+
+          gh pr create \
+            --base main \
+            --head "${branch}" \
+            --title "${FORMULA} ${version}" \
+            --body "${body}"
+
+          # Auto-merge lets the build verification in tests.yaml gate the bump
+          # without a human round trip. It is not fatal when the repository has
+          # the setting turned off.
+          gh pr merge --auto --squash --delete-branch "${branch}" \
+            || echo "::warning::could not enable auto-merge; merge the pull request manually"

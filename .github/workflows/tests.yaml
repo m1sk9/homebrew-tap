@@ -1,0 +1,53 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-bot:
+    name: test-bot (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - macos-15
+          - macos-15-intel
+    steps:
+      - name: Set up Homebrew
+        id: set-up-homebrew
+        uses: Homebrew/actions/setup-homebrew@master
+
+      - name: Cache Homebrew Bundler RubyGems
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.set-up-homebrew.outputs.gems-path }}
+          key: ${{ matrix.os }}-rubygems-${{ steps.set-up-homebrew.outputs.gems-hash }}
+          restore-keys: ${{ matrix.os }}-rubygems-
+
+      - name: Clean up before testing
+        run: brew test-bot --only-cleanup-before
+
+      - name: Set up test-bot
+        run: brew test-bot --only-setup
+
+      - name: Check tap syntax
+        run: brew test-bot --only-tap-syntax
+
+      # Formulae are built from source on every supported platform, which is
+      # slow, so it is limited to pull requests: every formula change (including
+      # the automated bumps from publish.yaml) arrives as one.
+      - name: Build and test changed formulae
+        if: github.event_name == 'pull_request'
+        run: brew test-bot --only-formulae
