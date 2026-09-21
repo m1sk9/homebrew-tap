@@ -27,7 +27,11 @@ jobs:
     steps:
       - name: Set up Homebrew
         id: set-up-homebrew
-        uses: Homebrew/actions/setup-homebrew@master
+        # Pinned to a commit rather than a branch: `@master` silently became
+        # unresolvable when Homebrew renamed the default branch, taking every
+        # job in this workflow down with it. Homebrew/actions cuts dated
+        # releases, so the pin still has a name to bump.
+        uses: Homebrew/actions/setup-homebrew@1e34f2e2acaa766b7efacb8c26352e6abbb023f9 # 2026.09.13.1
 
       - name: Cache Homebrew Bundler RubyGems
         uses: actions/cache@v4
