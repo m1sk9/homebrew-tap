@@ -7,7 +7,7 @@ class Strays < Formula
   # `brew readall --os=all --arch=all` on the Intel runner before
   # `depends_on arch:` below ever gets the chance to refuse the install.
   url "https://github.com/m1sk9/strays/releases/download/v0.3.0/strays-aarch64-apple-darwin.tar.gz"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256 "bb7859621f1244204686e8a7c3d3570be365225cf4ad5c13b24c6d309f9a40d7"
   license "MIT"
 
   on_macos do
@@ -21,12 +21,12 @@ class Strays < Formula
   on_linux do
     on_intel do
       url "https://github.com/m1sk9/strays/releases/download/v0.3.0/strays-x86_64-unknown-linux-musl.tar.gz"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+      sha256 "96778874c995c0abc5ff20f328dcd1121de2f4adbb2d211f447eb5cba5ed9cf3"
     end
 
     on_arm do
       url "https://github.com/m1sk9/strays/releases/download/v0.3.0/strays-aarch64-unknown-linux-musl.tar.gz"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+      sha256 "f3645603c400b3dd3aa4c65f750d2e94b3dd49f3397b0dfdf7b20f4fdea65565"
     end
   end
 
