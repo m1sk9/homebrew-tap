@@ -78,27 +78,81 @@ jobs:
           set -euo pipefail
 
           formula_file="Formula/${FORMULA}.rb"
-          current_url="$(sed -n 's/^  url "\(.*\)"$/\1/p' "${formula_file}")"
           homepage="$(sed -n 's/^  homepage "\(.*\)"$/\1/p' "${formula_file}")"
-          if [[ -z "${current_url}" || -z "${homepage}" ]]; then
+          current_urls=()
+          while IFS= read -r url; do
+            current_urls+=("${url}")
+          done < <(sed -n 's/^[[:space:]]*url "\(.*\)"$/\1/p' "${formula_file}")
+          if [[ -z "${homepage}" || -z "${current_urls[*]:-}" ]]; then
             echo "::error::could not read the stable url and homepage from ${formula_file}"
             exit 1
           fi
           echo "homepage=${homepage}" >> "${GITHUB_OUTPUT}"
 
-          # The tag is the last path segment of the release tarball url, so the
-          # bump is a substitution on that segment alone. This keeps the rest of
-          # the url (host, owner, repo, archive layout) authoritative in the
-          # formula instead of reconstructing it here.
-          new_url="${current_url%/*}/${TAG}.tar.gz"
-          curl --fail --silent --show-error --location --output release.tar.gz "${new_url}"
-          new_sha256="$(sha256sum release.tar.gz | cut -d ' ' -f 1)"
-          rm release.tar.gz
+          # The tag is the only part of a url a bump touches, so the rest (host,
+          # owner, repo, archive layout, platform triple) stays authoritative in
+          # the formula instead of being reconstructed here. A release asset
+          # carries the tag as a path segment and a versionless filename; a
+          # source tarball carries it as the filename itself.
+          new_urls=()
+          release_base=""
+          for url in "${current_urls[@]}"; do
+            if [[ "${url}" == */releases/download/*/* ]]; then
+              release_base="${url%%/releases/download/*}"
+              new_urls+=("${release_base}/releases/download/${TAG}/${url##*/}")
+            else
+              new_urls+=("${url%/*}/${TAG}.tar.gz")
+            fi
+          done
 
-          sed -i \
-            -e "s|^  url \".*\"$|  url \"${new_url}\"|" \
-            -e "s|^  sha256 \".*\"$|  sha256 \"${new_sha256}\"|" \
-            "${formula_file}"
+          # A release that ships SHA256SUMS has already hashed every archive it
+          # published, so one request replaces downloading each archive just to
+          # hash it again — which is what a multi-platform formula would
+          # otherwise cost. Formulae whose release has no such file (source
+          # tarballs, in particular) still fall back to hashing the download.
+          checksums=""
+          if [[ -n "${release_base}" ]]; then
+            checksums="$(curl --fail --silent --location \
+              "${release_base}/releases/download/${TAG}/SHA256SUMS" || true)"
+          fi
+
+          new_sha256s=()
+          for new_url in "${new_urls[@]}"; do
+            asset="${new_url##*/}"
+            new_sha256=""
+            if [[ -n "${checksums}" ]]; then
+              new_sha256="$(awk -v asset="${asset}" '$2 == asset { print $1; exit }' <<< "${checksums}")"
+            fi
+            if [[ -z "${new_sha256}" ]]; then
+              curl --fail --silent --show-error --location --output release.asset "${new_url}"
+              new_sha256="$(sha256sum release.asset | cut -d ' ' -f 1)"
+              rm release.asset
+            fi
+            new_sha256s+=("${new_sha256}")
+          done
+
+          # Rewritten in file order: within a formula every `sha256` belongs to
+          # the `url` above it, so the Nth pair is the Nth platform. `sed` alone
+          # cannot express that pairing, and it would have to hardcode the
+          # indentation of every nested `on_*` block on top.
+          paste -d '\t' \
+            <(printf '%s\n' "${new_urls[@]}") \
+            <(printf '%s\n' "${new_sha256s[@]}") > replacements.tsv
+          awk -v version="${TAG#v}" -v replacements=replacements.tsv '
+            BEGIN {
+              while ((getline line < replacements) > 0) {
+                split(line, field, "\t")
+                urls[++count] = field[1]
+                sha256s[count] = field[2]
+              }
+            }
+            /^[[:space:]]*url "/ { sub(/url ".*"$/, "url \"" urls[++url_index] "\"") }
+            /^[[:space:]]*sha256 "/ { sub(/sha256 ".*"$/, "sha256 \"" sha256s[++sha256_index] "\"") }
+            /^[[:space:]]*version "/ { sub(/version ".*"$/, "version \"" version "\"") }
+            { print }
+          ' "${formula_file}" > formula.updated
+          mv formula.updated "${formula_file}"
+          rm replacements.tsv
 
           if git diff --quiet -- "${formula_file}"; then
             echo "::notice::${FORMULA} is already at ${TAG}"
@@ -176,13 +230,24 @@ jobs:
             name="$(basename "${file}" .rb)"
 
             # Casks always carry a `version` stanza. Formulae usually leave it
-            # implicit and let Homebrew derive it from the release tarball, whose
-            # filename is the last path segment the bump job substitutes.
+            # implicit and let Homebrew derive it from the download url, which
+            # carries the tag either as the tarball filename or as the release
+            # asset's parent directory.
             version="$(sed -n 's/^  version "\(.*\)"$/\1/p' "${file}")"
             if [[ -z "${version}" ]]; then
-              url="$(sed -n 's/^  url "\(.*\)"$/\1/p' "${file}")"
-              segment="$(basename "${url}")"
-              segment="${segment%.tar.gz}"
+              url="$(sed -n 's/^[[:space:]]*url "\(.*\)"$/\1/p' "${file}" | head -n 1)"
+              case "${url}" in
+                */releases/download/*/*)
+                  # A prebuilt archive is named after its platform, not its
+                  # version; the tag is the path segment above the filename.
+                  segment="${url%/*}"
+                  segment="${segment##*/}"
+                  ;;
+                *)
+                  segment="$(basename "${url}")"
+                  segment="${segment%.tar.gz}"
+                  ;;
+              esac
               version="${segment#v}"
             fi
 
