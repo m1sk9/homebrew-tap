@@ -10,6 +10,11 @@ class Strays < Formula
   sha256 "3361497da863b2af8918d0cacd9da608f55aa2ef2298ccd7b112dca39b7de394"
   license "MIT"
 
+  # Maintenance of strays has ended, so installs are refused with a message
+  # instead of deleting the formula, which would leave existing users with no
+  # explanation for why `brew upgrade` stopped finding it.
+  disable! date: "2026-11-05", because: :unmaintained
+
   on_macos do
     # Intel macOS was sunset upstream (m1sk9/strays#19) and no
     # x86_64-apple-darwin archive is published. With no source build to fall
