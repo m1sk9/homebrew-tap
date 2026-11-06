@@ -1,8 +1,8 @@
 class Trier < Formula
   desc "Open each URL in the browser its rule picks"
   homepage "https://github.com/m1sk9/trier"
-  url "https://github.com/m1sk9/trier/releases/download/v0.1.1/trier-aarch64-apple-darwin.tar.gz"
-  sha256 "1150572db129fff203faa253afe189617fd11deeb827f10ecbf4f5dcfa13b469"
+  url "https://github.com/m1sk9/trier/releases/download/v0.2.0/trier-aarch64-apple-darwin.tar.gz"
+  sha256 "01b2c3c7995754816f2885654c81ac15d2bc653b4669d9ad400c3f5518f8d964"
   license "MIT"
 
   # Only an aarch64-apple-darwin archive is published: trier registers itself
